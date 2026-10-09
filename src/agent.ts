@@ -29,7 +29,11 @@ export function buildVisionAgentConfig(opts: Opts): Record<string, any> {
 export function applyConfig(cfg: Config, opts: Opts): void {
   const model = opts.model;
   if (!model) return;
-  const [provider, modelId] = model.split("/");
+  // Model IDs may contain slashes: split on the FIRST slash only.
+  const slash = model.indexOf("/");
+  if (slash < 0) return;
+  const provider = model.slice(0, slash);
+  const modelId = model.slice(slash + 1);
   if (!provider || !modelId) return;
 
   cfg.provider = cfg.provider || {};
@@ -65,8 +69,12 @@ export function applyAgent(
 ): void {
   const model = opts.model;
   if (!model) return;
-  const [providerID, modelID] = model.split("/");
-  if (!providerID || !modelID) return;
+  // Model IDs may contain slashes (e.g. `bifrost/vllm/zai/glm-5.3-flash`):
+  // split on the FIRST slash only, otherwise the model ID is truncated.
+  const slash = model.indexOf("/");
+  if (slash < 0) return;
+  const providerID = model.slice(0, slash);
+  const modelID = model.slice(slash + 1);
   const agentName = opts.agent || "vision";
   editor.update(agentName, (agent) => {
     agent.name = agentName;
@@ -74,11 +82,15 @@ export function applyAgent(
     agent.mode = "subagent";
     agent.model = { providerID, id: modelID };
     agent.system = buildVisionAgentConfig(opts).prompt;
-    agent.permissions = [
-      { action: "external_directory", resource: "*", effect: "allow" },
-      { action: "shell", resource: "*", effect: "deny" },
-      { action: "edit", resource: "*", effect: "deny" },
-      { action: "webfetch", resource: "*", effect: "deny" },
-    ];
+    // OpenCode V2 agents take a `permission` OBJECT (this array shape was V1-era
+    // and is ignored in V2). `external_directory: "allow"` is required so the
+    // subagent can read the decoded image file under the OS tmp dir.
+    agent.permission = {
+      external_directory: "allow",
+      bash: "deny",
+      edit: "deny",
+      webfetch: "deny",
+      doom_loop: "deny",
+    };
   });
 }

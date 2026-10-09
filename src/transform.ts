@@ -57,11 +57,13 @@ export interface V2Msg {
 
 /** V2 media part carrying image bytes. */
 export function isMediaImagePart(part: any): part is MediaPartLike {
-  return (
-    part?.type === "media" &&
-    typeof part.mediaType === "string" &&
-    part.mediaType.startsWith("image/")
-  );
+  if (part?.type !== "media") return false;
+  // OpenCode >= 2.0.x nests the media type under media.source
+  const mediaType =
+    part.mediaType ??
+    part.media?.source?.mediaType ??
+    part.media?.mediaType;
+  return typeof mediaType === "string" && mediaType.startsWith("image/");
 }
 
 /**

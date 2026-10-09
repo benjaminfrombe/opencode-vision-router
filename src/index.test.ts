@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { resolveImagePath, resolveMediaPath, decodeDataUrl, extForMime } from "./image";
-import { transformMessages, transformV2Messages, imagePointer } from "./transform";
+import { transformMessages, transformV2Messages, imagePointer, isMediaImagePart } from "./transform";
 import { applyConfig, applyAgent, buildVisionAgentConfig, delegationInstruction } from "./agent";
 import type { Config } from "@opencode-ai/plugin";
 import plugin from "./index";
@@ -266,6 +266,50 @@ describe("OpenCode V2 media helpers", () => {
       resolveMediaPath({ type: "media", mediaType: "image/png", filename: "z.png" }),
     ).toBe("z.png");
   });
+
+  it("should handle the opencode >= 2.0.x nested media shape (source.type base64)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "vr-test-"));
+    const b64 = Buffer.from("nestedimagebytes").toString("base64");
+    const p = resolveMediaPath(
+      {
+        type: "media",
+        media: { source: { type: "base64", data: b64, mediaType: "image/png" } },
+        filename: "shot.png",
+      } as any,
+      dir,
+    );
+    expect(p).toBeTruthy();
+    expect(p!.startsWith(dir)).toBe(true);
+    expect(existsSync(p!)).toBe(true);
+    expect(p!.endsWith(".png")).toBe(true);
+  });
+
+  it("should resolve file:// and absolute paths from the nested source", () => {
+    expect(
+      resolveMediaPath({
+        type: "media",
+        media: { source: { type: "file", uri: "file:///orig/a.png" } },
+      } as any),
+    ).toBe("/orig/a.png");
+    expect(
+      resolveMediaPath({
+        type: "media",
+        media: { source: { type: "url", url: "/orig/b.png" } },
+      } as any),
+    ).toBe("/orig/b.png");
+  });
+
+  it("should detect image media parts in the nested shape", () => {
+    const nested = {
+      type: "media",
+      media: { source: { type: "base64", data: "AAAA", mediaType: "image/png" } },
+    };
+    expect(isMediaImagePart(nested)).toBe(true);
+    expect(isMediaImagePart({ type: "text", text: "x" })).toBe(false);
+    expect(
+      isMediaImagePart({ type: "media", media: { source: { mediaType: "application/pdf" } } }),
+    ).toBe(false);
+  });
 });
 
 describe("transformV2Messages", () => {
@@ -322,13 +366,25 @@ describe("OpenCode V2 agent injection", () => {
     expect(agent.mode).toBe("subagent");
     expect(agent.model).toEqual({ providerID: "opencode-go", id: "qwen3.7-plus" });
     expect(agent.system).toContain("vision analysis subagent");
-    expect(agent.permissions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ action: "shell", effect: "deny" }),
-        expect.objectContaining({ action: "edit", effect: "deny" }),
-        expect.objectContaining({ action: "external_directory", effect: "allow" }),
-      ]),
+    expect(agent.permission).toEqual({
+      external_directory: "allow",
+      bash: "deny",
+      edit: "deny",
+      webfetch: "deny",
+      doom_loop: "deny",
+    });
+  });
+
+  it("should keep nested slashes in the model ID (split on the first slash only)", () => {
+    const agents: any = {};
+    applyAgent(
+      { update: (id: string, update: (a: any) => void) => { const a: any = {}; update(a); agents[id] = a; } },
+      { model: "bifrost/vllm/zai/glm-5.3-flash", agent: "vision" },
     );
+    expect(agents["vision"].model).toEqual({
+      providerID: "bifrost",
+      id: "vllm/zai/glm-5.3-flash",
+    });
   });
 
   it("should be a no-op without a model", () => {

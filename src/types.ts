@@ -33,4 +33,19 @@ export interface MediaPartLike {
   data?: string | Uint8Array;
   filename?: string;
   metadata?: Record<string, unknown>;
+  /**
+   * OpenCode >= 2.0.x nests the payload: `{ media: { source: { type: "base64"|"url"|"file",
+   * data?, url?/uri?, mediaType } } }`.
+   */
+  media?: {
+    mediaType?: string;
+    data?: string | Uint8Array;
+    source?: {
+      type?: string;
+      data?: string | Uint8Array;
+      mediaType?: string;
+      url?: string;
+      uri?: string;
+    };
+  };
 }
