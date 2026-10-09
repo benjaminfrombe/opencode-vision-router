@@ -67,10 +67,26 @@ export function isMediaImagePart(part: any): part is MediaPartLike {
 }
 
 /**
+ * An image file part embedded in a tool-result value. The read tool returns
+ * images as data-URI file parts; these persist in history and are replayed to
+ * the model on every later step, so they must be stripped for text-only models
+ * too, not just images on user messages.
+ */
+export function isFileUriImagePart(part: any): boolean {
+  if (part?.type !== "file") return false;
+  const uri = part?.uri;
+  if (typeof uri !== "string") return false;
+  if (uri.startsWith("data:image/")) return true;
+  return uri.startsWith("file://") || uri.startsWith("/");
+}
+
+/**
  * V2 variant of `transformMessages`: OpenCode V2 messages use `role` + a
- * `content` array, and images arrive as `media` parts carrying raw bytes.
- * Replace image media parts on user messages with the text pointer. Returns a
- * new message array; the input is not mutated.
+ * `content` array. Images arrive as `media` parts on user messages, and also
+ * as data-URI file parts inside tool-result values (e.g. the read tool).
+ * Replace both with the text pointer so a text-only model never sees image
+ * bytes, regardless of where in the history they live. Returns a new message
+ * array; the input is not mutated.
  */
 export function transformV2Messages(
   messages: V2Msg[],
@@ -78,10 +94,28 @@ export function transformV2Messages(
   tmpDir?: string,
 ): V2Msg[] {
   return messages.map((msg) => {
-    if (msg?.role && msg.role !== "user") return msg;
+    const role = msg?.role;
+
+    // Tool messages: strip image parts embedded in tool-result values.
+    if (role === "tool") {
+      const parts = msg?.content;
+      if (!Array.isArray(parts)) return msg;
+      let replaced = false;
+      const newParts = (parts as any[]).map((part) => {
+        const next = stripToolResultImages(part, agentName, tmpDir);
+        if (next !== part) replaced = true;
+        return next;
+      });
+      return replaced ? { ...msg, content: newParts } : msg;
+    }
+
+    // User messages: replace image media/file parts with the pointer.
+    if (role && role !== "user") return msg;
     const parts = msg?.content;
     if (!Array.isArray(parts)) return msg;
-    const hasImage = (parts as any[]).some(isMediaImagePart);
+    const hasImage =
+      (parts as any[]).some(isMediaImagePart) ||
+      (parts as any[]).some(isImagePart);
     if (!hasImage) return msg;
 
     let replaced = false;
@@ -93,9 +127,54 @@ export function transformV2Messages(
           return { type: "text", text: imagePointer(path, agentName) };
         }
       }
+      if (isImagePart(part)) {
+        const path = resolveMediaPath(part as any, tmpDir);
+        if (path) {
+          replaced = true;
+          return { type: "text", text: imagePointer(path, agentName) };
+        }
+      }
       return part;
     });
 
     return replaced ? { ...msg, content: newParts } : msg;
   });
+}
+
+/**
+ * Replace image file parts inside a tool-result `content` value with the text
+ * pointer. Returns the part unchanged when there is nothing to strip.
+ */
+function stripToolResultImages(
+  part: any,
+  agentName: string,
+  tmpDir?: string,
+): any {
+  if (part?.type !== "tool-result") return part;
+  const result = part?.result;
+  if (!result || result.type !== "content" || !Array.isArray(result.value)) {
+    return part;
+  }
+  let replaced = false;
+  const newValue = (result.value as any[]).map((item) => {
+    if (isFileUriImagePart(item)) {
+      const path = resolveMediaPath(
+        { ...item, media: { source: { type: "url", url: item.uri } } } as any,
+        tmpDir,
+      );
+      if (path) {
+        replaced = true;
+        return { type: "text", text: imagePointer(path, agentName) };
+      }
+    }
+    if (isMediaImagePart(item)) {
+      const path = resolveMediaPath(item, tmpDir);
+      if (path) {
+        replaced = true;
+        return { type: "text", text: imagePointer(path, agentName) };
+      }
+    }
+    return item;
+  });
+  return replaced ? { ...part, result: { ...result, value: newValue } } : part;
 }

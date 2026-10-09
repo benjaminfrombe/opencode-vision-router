@@ -339,8 +339,76 @@ describe("transformV2Messages", () => {
       { role: "user", content: "just text" },
     ];
     const out = transformV2Messages(msgs as any, "vision") as any;
-    expect(out[0].content[0].type).toBe("media"); // unchanged (assistant)
     expect(out[1].content).toBe("just text");
+  });
+
+  it("should strip data-URI image file parts embedded in tool results", () => {
+    const msgs = [
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            id: "t1",
+            name: "read",
+            result: {
+              type: "content",
+              value: [
+                { type: "text", text: "Image read successfully" },
+                { type: "file", uri: "data:image/png;base64,AAAA" },
+              ],
+            },
+          },
+        ],
+      },
+    ];
+    const out = transformV2Messages(msgs as any, "vision") as any;
+    const value = out[0].content[0].result.value;
+    expect(value.some((p: any) => p.type === "file")).toBe(false);
+    expect(value.some((p: any) => p.type === "text" && p.text.includes("saved at:"))).toBe(true);
+  });
+
+  it("should strip image media parts from tool results too", () => {
+    const msgs = [
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            id: "t1",
+            name: "render",
+            result: {
+              type: "content",
+              value: [
+                { type: "media", mediaType: "image/png", data: "AAAA" },
+              ],
+            },
+          },
+        ],
+      },
+    ];
+    const out = transformV2Messages(msgs as any, "vision") as any;
+    const value = out[0].content[0].result.value;
+    expect(value.some((p: any) => p.type === "media")).toBe(false);
+    expect(value.some((p: any) => p.type === "text" && p.text.includes("saved at:"))).toBe(true);
+  });
+
+  it("should leave non-image tool results untouched", () => {
+    const msgs = [
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            id: "t1",
+            name: "shell",
+            result: { type: "text", value: "ok" },
+          },
+        ],
+      },
+    ];
+    const out = transformV2Messages(msgs as any, "vision") as any;
+    expect(out[0].content[0]).toEqual(msgs[0].content[0]);
   });
 
   it("should keep non-image media (e.g. audio) untouched", () => {
